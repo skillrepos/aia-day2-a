@@ -1,17 +1,16 @@
-# Understanding and Working with Agents
-## A Hands-on Gen AI Workshop
+# Understanding AI Agents
 
-Repository for ATO Agents hands-on workshop
+Repository for AI Agents hands-on workshop
 
 These instructions will guide you through configuring a GitHub Codespaces environment that you can use to run the course labs. 
 
 **1. Click on the button below to start a new codespace from this repository.**
 
-Click here ➡️  [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/skillrepos/ato-agents?quickstart=1)
+Click here ➡️  [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/skillrepos/ai-agents?quickstart=1)
 
 **2. Then click on the option to create a new codespace.**
 
-![Creating new codespace from button](./images/ato-a1.png?raw=true "Creating new codespace from button")
+![Creating new codespace from button](./images/aa74.png?raw=true "Creating new codespace from button")
 
 This will run for a few minutes while it gets the virtual environment ready. You'll then need to run a setup script to finalize the installation.
 

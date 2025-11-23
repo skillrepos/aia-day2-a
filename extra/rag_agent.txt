@@ -52,6 +52,7 @@ COLLECTION_NAME = "pdf_documents"   # Collection name from index_pdfs.py
 # Ollama settings for LLM
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
+OLLAMA_TIMEOUT = 180
 
 # Agent memory settings
 MAX_CONVERSATION_HISTORY = 3  # Remember last 3 exchanges
@@ -60,6 +61,7 @@ MAX_CONVERSATION_HISTORY = 3  # Remember last 3 exchanges
 client = OpenAI(
     base_url='http://localhost:11434/v1',
     api_key='ollama',  # dummy key for Ollama
+    timeout=OLLAMA_TIMEOUT
 )
 
 # ═══════════════════════════════════════════════════════════════════

@@ -163,65 +163,121 @@ convert 300
 </br></br>
 
     
-**Lab 3 - Using RAG with Agents**
+**Lab 3 - Using RAG with Agents - Enhanced with Memory and Context Awareness**
 
-**Purpose: In this lab, we’ll explore how agents can leverage external data stores via RAG**
+**Purpose: In this lab, we'll build an intelligent RAG agent that maintains conversation memory and handles follow-up questions**
 
 ---
 
 **What the agent example does**
-- Reads, processes, and stores information about company offices from a PDF file
-- Lets you input a starting location
-- Lets you prompt about a destination location such as an office name
-- Maps the destination back to data taken from the PDF if it can
-- Uses the destination from the PDF data or from the prompt to  
-  - Find and provide 3 interesting facts about the destination
-  - Calculate distance from the starting location to the destination
-- Stores information about starting location in an external file
-- Repeats until user enters *exit*
+- Uses a proper three-step RAG pattern: **Retrieve → Augment → Generate**
+- **Maintains conversation memory** across queries
+- **Detects and handles follow-up questions** intelligently
+- **Caches query results** for improved performance
+- Augments prompts with both retrieved context and conversation history
+- Provides source citations for transparency
 
-**What it demonstrates about the framework**
-- Shows a real-world use of RAG: mapping user input to structured, embedded knowledge.
+**What makes this an AGENT (not just a RAG system)**
+- **Conversation Memory**: Remembers last 3 exchanges for contextual understanding
+- **Follow-up Detection**: Recognizes when you're asking about "that" or "it"
+- **Smart Caching**: Reuses recent search results when appropriate
+- **Contextual Responses**: Says "As we discussed earlier..." when referencing past answers
+- **Stateful Interaction**: Unlike simple Q&A, maintains state across queries
 
 ---
 
 ### Steps
 
-1. For this lab, we have an application that reads in a data file in PDF format as our RAG source. The PDF file we're using to illustrate RAG here is a fictional list of offices and related info for a company. You can see it in the repo at  [**data/offices.pdf**](./data/offices.pdf) 
+1. For this lab, we'll be using a comprehensive knowledge base of OmniTech company documentation including returns policies, device troubleshooting, shipping logistics, and account security. These PDFs are located in [**knowledge_base_pdfs/**](./knowledge_base_pdfs/)
 
-![Data pdf](./images/aa66.png?raw=true "Data pdf") 
+2. First, we need to create the vector database from our PDFs. This will chunk the documents, create embeddings, and store them in ChromaDB. Change to the agents directory if you're not already there:
 
+```
+cd agents
+```
 
-2. As before, we'll use the "view differences and merge" technique to learn about the code we'll be working with. The command to run this time is below. The code differences mainly hightlight the changes for RAG use in the agent, including working with vector database and snippets returned from searching it.
-   
+3. Now run the indexing tool to create the vector database. This uses the same best practices from Day 1 including semantic chunking, table extraction, and rich metadata:
+
+```
+python ../tools/index_pdfs.py --pdf-dir ../knowledge_base_pdfs --chroma-path ./chroma_db
+```
+
+You should see output showing the PDFs being processed and chunks being indexed.
+
+![Indexing PDFs](./images/rag-index.png?raw=true "Indexing PDFs")
+
+4. As before, we'll use the "view differences and merge" technique to build our RAG agent. The updated code incorporates all the best practices including the three-step RAG pattern:
+
 ```
 code -d ../extra/rag_agent.txt rag_agent.py
 ```
 </br></br>
 
-![Code for rag agent](./images/aa65.png?raw=true "Code for rag agent") 
+![Code for rag agent](./images/rag-code.png?raw=true "Code for rag agent")
 
+Notice the three key methods in the code:
+- `retrieve()` - Searches the vector database for relevant chunks
+- `build_prompt()` - Augments the user query with retrieved context
+- `generate()` - Calls the LLM to generate a grounded answer
 
-3. When you're done merging, close the tab as usual to save your changes. Now, in a terminal, run the agent with the command below:
+5. When you're done merging, close the tab as usual to save your changes. Now, in a terminal, run the agent:
 
 ```
 python rag_agent.py
 ```
 
-4. You'll see the agent loading up the embedding pieces it needs to store the document in the vector database. After that you can choose to override the default starting location, or leave it on the default. You'll see a *User:* prompt when it is ready for input from you. The agent is geared around you entering a prompt about an office. Try a prompt like one of the ones below about office "names" that are only in the PDF.
+6. You'll see the agent connect to the ChromaDB database and display statistics about the knowledge base including total chunks and source documents. It will also check that Ollama is running with the correct model.
+
+![RAG initialization](./images/rag-init.png?raw=true "RAG initialization")
+
+7. The system will show example questions with follow-up suggestions. Notice the agent features like memory status and special commands. Try this conversation sequence:
+
+**First question:**
+```
+How can I return a product?
+```
+The agent will provide a detailed answer with sources.
+
+**Follow-up (demonstrating memory):**
+```
+Tell me more about the timeframe
+```
+Notice: The agent detects this as a follow-up and includes conversation context!
+
+8. You'll see the agent's intelligence in action:
+   - **[AGENT MEMORY]** messages when it detects follow-ups
+   - **[RETRIEVE]** with caching (may say "Using cached results")
+   - **Memory status** showing conversation length and cached queries
+   - Contextual answers like "As we discussed earlier..."
+
+![Agent memory in action](./images/rag-memory.png?raw=true "Agent memory in action")
+
+9. Try another conversation thread to see memory handling:
 
 ```
-Tell me about HQ
-Tell me about the Southern office
+What are the shipping costs?
+```
+Then follow with:
+```
+What about international?
 ```
 
-5. What you should see after that are some messages that show internal processing, such as the retrieved items from the RAG datastore.  Then the agent will run through the necessary steps like geocoding locations, calculating distance, using the LLM to get interesting facts about the city etc. At the end it will print out facts about the office location, and the city the office is in, as well as the distance to the office.
- 
-![Running the RAG agent](./images/aa67.png?raw=true "Running the RAG agent") 
+The agent understands "international" refers to shipping without you saying "international shipping costs"!
 
-6. The stored information about startup location is in a file named *user_starting_location.json* in the same directory. If you changed the starting location, you can view the file. (If you didn't change the location, the file won't exist.)
+10. Test the agent's special features:
+   - Type `clear` to reset memory and start fresh
+   - Ask about something NOT in docs: `What's the CEO's favorite color?`
+   - Then go back to a previous topic: `What about returns?`
+   - The agent will recall the earlier conversation!
 
-7. After the initial run, you can try prompts about other offices or cities mentioned in the PDF. Type *exit* when done.
+11. After exploring, type `exit` to quit. The agent will show how many queries it processed.
+
+**Key Takeaways - What Makes This an Agent:**
+- **Memory & State**: Unlike simple RAG, this agent maintains conversation history
+- **Context Awareness**: Detects and handles follow-up questions intelligently
+- **Performance Optimization**: Caches queries to avoid redundant searches
+- **Natural Conversation**: Understands pronouns and contextual references
+- **Agent Behavior**: This is how agents differ from stateless Q&A systems - they remember, learn, and adapt within a session
 
 <p align="center">
 **[END OF LAB]**

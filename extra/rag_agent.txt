@@ -1,13 +1,31 @@
-# Import necessary libraries
+#!/usr/bin/env python3
+"""
+Enhanced RAG Agent with Conversation Memory
+────────────────────────────────────────────────────────────────────
+Combines RAG best practices with agent-specific capabilities
+
+This implementation demonstrates:
+1. TRUE RAG: Retrieve → Augment → Generate pattern
+2. Conversation memory and context awareness
+3. Follow-up question detection
+4. Smart response caching
+5. Agent-like conversational behavior
+"""
+
 import os
 import json
+import logging
+from pathlib import Path
+from typing import List, Dict, Any, Optional
 import requests
-import math
+from collections import deque
+
+# ChromaDB imports for vector database
+from chromadb import PersistentClient
+from chromadb.config import Settings, DEFAULT_TENANT, DEFAULT_DATABASE
+
+# For LLM interaction
 from openai import OpenAI
-import chromadb
-import pdfplumber
-from sentence_transformers import SentenceTransformer
-from chromadb.utils import embedding_functions
 
 # ANSI color codes for terminal output
 BLUE = "\033[94m"
@@ -15,255 +33,568 @@ GREEN = "\033[92m"
 RED = "\033[91m"
 YELLOW = "\033[93m"
 CYAN = "\033[96m"
+MAGENTA = "\033[95m"
 RESET = "\033[0m"
 BOLD = "\033[1m"
 
-# Configuration constants
-STARTING_LOC_FILE = "user_starting_location.json"
-DEFAULT_LOCATION = {"city": "Raleigh, NC", "lat": 35.7796, "lon": -78.6382}
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("rag-agent")
 
-# Connect to local Ollama server
+# ═══════════════════════════════════════════════════════════════════
+# Configuration
+# ═══════════════════════════════════════════════════════════════════
+
+# ChromaDB settings
+CHROMA_PATH = Path("./chroma_db")  # Where the vector database is stored
+COLLECTION_NAME = "pdf_documents"   # Collection name from index_pdfs.py
+
+# Ollama settings for LLM
+OLLAMA_API_URL = "http://localhost:11434/api/generate"
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
+
+# Agent memory settings
+MAX_CONVERSATION_HISTORY = 3  # Remember last 3 exchanges
+
+# OpenAI client for Ollama (compatible API)
 client = OpenAI(
     base_url='http://localhost:11434/v1',
-    api_key='ollama',  # dummy key
+    api_key='ollama',  # dummy key for Ollama
 )
 
-# --- Functions for Location Management ---
-def load_starting_location():
-    """Load saved starting location from file or return default"""
-    if os.path.exists(STARTING_LOC_FILE):
+# ═══════════════════════════════════════════════════════════════════
+# RAG Agent Class with Memory
+# ═══════════════════════════════════════════════════════════════════
+
+class RAGAgent:
+    """Enhanced RAG Agent with conversation memory and follow-up detection"""
+
+    def __init__(self, chroma_path: Path = CHROMA_PATH, collection_name: str = COLLECTION_NAME):
+        """
+        Initialize the RAG Agent with memory
+
+        Parameters:
+        -----------
+        chroma_path : Path
+            Path to the ChromaDB directory
+        collection_name : str
+            Name of the collection to use
+        """
+        self.chroma_path = chroma_path
+        self.collection_name = collection_name
+        self.chroma_client = None
+        self.collection = None
+
+        # Agent memory components
+        self.conversation_history = deque(maxlen=MAX_CONVERSATION_HISTORY)
+        self.last_sources = []  # Remember sources from last query
+        self.query_cache = {}   # Cache recent queries and results
+
+        self.connect_to_database()
+
+    def connect_to_database(self):
+        """Connect to the existing ChromaDB persistent database"""
+        logger.info(f"Connecting to ChromaDB at {self.chroma_path}...")
+
+        # Check if database exists
+        if not self.chroma_path.exists():
+            logger.error(f"Database not found at {self.chroma_path.resolve()}")
+            logger.error("Please run 'python tools/index_pdfs.py' first to create the database.")
+            raise FileNotFoundError(f"ChromaDB not found at {self.chroma_path}")
+
+        # Connect using PersistentClient (reads from disk)
+        self.chroma_client = PersistentClient(
+            path=str(self.chroma_path),
+            settings=Settings(),
+            tenant=DEFAULT_TENANT,
+            database=DEFAULT_DATABASE,
+        )
+
         try:
-            with open(STARTING_LOC_FILE, 'r') as f:
-                data = json.load(f)
-                print(f"{GREEN}Loaded saved starting location: {data['city']}{RESET}")
-                return data
-        except:
-            print(f"{YELLOW}Error loading location file. Using default.{RESET}")
-    return DEFAULT_LOCATION
+            # Get existing collection
+            self.collection = self.chroma_client.get_collection(name=self.collection_name)
 
-def save_starting_location(city, lat, lon):
-    """Save new starting location to file"""
-    data = {"city": city, "lat": lat, "lon": lon}
-    with open(STARTING_LOC_FILE, 'w') as f:
-        json.dump(data, f)
-    print(f"{GREEN}Saved new starting location: {city}{RESET}")
+            # Verify collection has data
+            collection_data = self.collection.get()
+            total_chunks = len(collection_data.get("documents", []))
 
-def set_starting_location_interactively():
-    """Prompt user to set/update starting location"""
-    current_loc = load_starting_location()
-    
-    print(f"\n{CYAN}Current starting location: {current_loc['city']} ({current_loc['lat']}, {current_loc['lon']}){RESET}")
-    change = input("Do you want to change your starting location? (y/n): ").strip().lower()
-    
-    if change == 'y':
-        while True:
-            new_city = input("Enter new starting city (e.g., 'New York, NY'): ").strip()
-            if not new_city:
-                continue
-                
-            lat, lon = geocode_location(new_city)
-            if lat is None or lon is None:
-                print(f"{YELLOW}Could not find coordinates for '{new_city}'. Please try again.{RESET}")
+            logger.info(f"Successfully connected to collection '{self.collection_name}'")
+            logger.info(f"Collection contains {total_chunks} indexed chunks")
+
+        except Exception as e:
+            logger.error(f"Failed to access collection '{self.collection_name}': {e}")
+            logger.error("Make sure you've run 'python tools/index_pdfs.py' to create the index.")
+            raise
+
+    def detect_follow_up(self, query: str) -> bool:
+        """
+        Detect if the query is a follow-up to previous conversation
+
+        Parameters:
+        -----------
+        query : str
+            The user's query
+
+        Returns:
+        --------
+        bool
+            True if this appears to be a follow-up question
+        """
+        follow_up_indicators = [
+            "tell me more", "more about", "what about", "how about",
+            "also", "additionally", "furthermore", "and the",
+            "what else", "anything else", "can you explain",
+            "that", "this", "it", "they", "them",
+            "the same", "similar", "related"
+        ]
+
+        query_lower = query.lower()
+
+        # Check for pronouns or references without context
+        if len(query_lower.split()) < 5:  # Short queries often are follow-ups
+            for indicator in follow_up_indicators:
+                if indicator in query_lower:
+                    return True
+
+        # Check if query references something not fully specified
+        if query_lower.startswith(("what about", "how about", "and the", "also")):
+            return True
+
+        return False
+
+    def get_conversation_context(self) -> str:
+        """
+        Get formatted conversation history for context
+
+        Returns:
+        --------
+        str
+            Formatted conversation history
+        """
+        if not self.conversation_history:
+            return ""
+
+        context = "\n--- Previous Conversation ---\n"
+        for i, (q, a) in enumerate(self.conversation_history, 1):
+            # Truncate long answers for context
+            answer_preview = a[:200] + "..." if len(a) > 200 else a
+            context += f"Q{i}: {q}\n"
+            context += f"A{i}: {answer_preview}\n\n"
+        return context
+
+    def retrieve(self, query: str, max_results: int = 3) -> List[Dict]:
+        """
+        STEP 1: RETRIEVE - Find relevant chunks from vector database
+
+        Parameters:
+        -----------
+        query : str
+            The search query
+        max_results : int
+            Maximum number of chunks to retrieve
+
+        Returns:
+        --------
+        List[Dict]
+            List of relevant chunks with metadata
+        """
+        # Check cache first
+        cache_key = f"{query}:{max_results}"
+        if cache_key in self.query_cache:
+            print(f"{MAGENTA}[AGENT MEMORY] Using cached results for similar query{RESET}")
+            return self.query_cache[cache_key]
+
+        try:
+            logger.info(f"[RETRIEVE] Searching for: '{query}'")
+
+            # Query ChromaDB using semantic search
+            results = self.collection.query(
+                query_texts=[query],
+                n_results=max_results,
+                include=["documents", "metadatas", "distances"]
+            )
+
+            # Format results
+            retrieved_chunks = []
+
+            if results['documents'] and len(results['documents'][0]) > 0:
+                for i in range(len(results['documents'][0])):
+                    document = results['documents'][0][i]
+                    metadata = results['metadatas'][0][i]
+                    distance = results['distances'][0][i]
+
+                    # Convert distance to score (lower distance = higher score)
+                    score = 1.0 / (1.0 + distance)
+
+                    retrieved_chunks.append({
+                        "content": document,
+                        "source": metadata.get('source', 'unknown'),
+                        "page": metadata.get('page', 'unknown'),
+                        "type": metadata.get('type', 'text'),
+                        "score": score
+                    })
+
+                    print(f"{CYAN}  Found: {metadata.get('source')} (page {metadata.get('page')}) - Score: {score:.3f}{RESET}")
+
+            # Cache the results
+            self.query_cache[cache_key] = retrieved_chunks
+
+            # Keep cache size manageable
+            if len(self.query_cache) > 10:
+                # Remove oldest cached item
+                self.query_cache.pop(next(iter(self.query_cache)))
+
+            return retrieved_chunks
+
+        except Exception as e:
+            logger.error(f"Retrieval failed: {e}")
+            return []
+
+    def build_prompt(self, query: str, context_chunks: List[Dict], include_conversation: bool = False) -> str:
+        """
+        STEP 2: AUGMENT - Build a prompt with retrieved context and conversation history
+
+        Parameters:
+        -----------
+        query : str
+            User's original question
+        context_chunks : List[Dict]
+            Retrieved chunks from vector database
+        include_conversation : bool
+            Whether to include conversation history
+
+        Returns:
+        --------
+        str
+            Augmented prompt for the LLM
+        """
+        logger.info("[AUGMENT] Building prompt with context...")
+
+        # Build context section
+        context_text = ""
+        for i, chunk in enumerate(context_chunks, 1):
+            context_text += f"\n--- Context {i} (Source: {chunk['source']}, Page: {chunk['page']}) ---\n"
+            context_text += chunk['content']
+            context_text += "\n"
+
+        # Add conversation history if this is a follow-up
+        conversation_context = ""
+        if include_conversation and self.conversation_history:
+            conversation_context = self.get_conversation_context()
+
+        # Build full prompt
+        prompt = f"""You are a helpful assistant answering questions based on the provided documentation.
+{conversation_context}
+CONTEXT FROM DOCUMENTATION:
+{context_text}
+
+USER QUESTION:
+{query}
+
+INSTRUCTIONS:
+- Answer based ONLY on the context provided above
+- If this appears to be a follow-up question, consider the conversation history
+- Be specific and detailed in your response
+- Cite which document and page the information comes from when relevant
+- If referencing previous answers, mention "As we discussed earlier..."
+- If the context doesn't contain enough information to fully answer the question, say so clearly
+- Provide practical, actionable information when applicable
+
+ANSWER:"""
+
+        return prompt
+
+    def generate(self, prompt: str) -> str:
+        """
+        STEP 3: GENERATE - Get answer from LLM
+
+        Parameters:
+        -----------
+        prompt : str
+            The augmented prompt with context
+
+        Returns:
+        --------
+        str
+            Generated answer from the LLM
+        """
+        logger.info("[GENERATE] Querying Llama 3.2 via Ollama...")
+
+        try:
+            # Use Ollama API for generation
+            payload = {
+                "model": OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.3,  # Lower for more focused answers
+                    "top_p": 0.9,
+                    "max_tokens": 500
+                }
+            }
+
+            response = requests.post(
+                OLLAMA_API_URL,
+                json=payload,
+                timeout=60
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                answer = result.get('response', '').strip()
+                logger.info("[GENERATE] Answer generated successfully")
+                return answer
             else:
-                save_starting_location(new_city, lat, lon)
-                return {"city": new_city, "lat": lat, "lon": lon}
-    
-    return current_loc
+                error_msg = f"Ollama API error: {response.status_code}"
+                logger.error(error_msg)
+                return f"Error: Failed to get response from Ollama"
 
-# --- Core Functions ---
-# --- Convert city name to lat/lon coordinates ---
-def geocode_location(location_query):
-    """Convert city name to lat/lon coordinates"""
-    print(f"{CYAN}Geocoding location: '{location_query}'{RESET}")
-    headers = {'User-Agent': 'TravelAssistant/1.0'}
+        except requests.exceptions.ConnectionError:
+            error_msg = "Could not connect to Ollama. Make sure Ollama is running: ollama serve"
+            logger.error(error_msg)
+            return f"Error: {error_msg}"
+        except Exception as e:
+            error_msg = f"Generation failed: {e}"
+            logger.error(error_msg)
+            return f"Error: {error_msg}"
+
+    def query(self, question: str, max_context_chunks: int = 3) -> Dict:
+        """
+        Complete RAG pipeline with memory: Retrieve → Augment → Generate
+
+        Parameters:
+        -----------
+        question : str
+            User's question
+        max_context_chunks : int
+            How many chunks to retrieve as context
+
+        Returns:
+        --------
+        Dict
+            Answer and metadata
+        """
+        # Check if this is a follow-up question
+        is_follow_up = self.detect_follow_up(question)
+
+        if is_follow_up and self.conversation_history:
+            print(f"{MAGENTA}[AGENT MEMORY] Detected follow-up question - including conversation context{RESET}")
+
+        print(f"\n{BOLD}{BLUE}{'='*60}{RESET}")
+        print(f"{BOLD}{BLUE}RAG Query: {question}{RESET}")
+        if is_follow_up:
+            print(f"{MAGENTA}(Follow-up to previous discussion){RESET}")
+        print(f"{BOLD}{BLUE}{'='*60}{RESET}\n")
+
+        # STEP 1: RETRIEVE
+        context_chunks = self.retrieve(question, max_results=max_context_chunks)
+
+        if not context_chunks:
+            answer = "I couldn't find any relevant information in the documentation."
+            # Still save to history even if no results
+            self.conversation_history.append((question, answer))
+            return {
+                "answer": answer,
+                "sources": []
+            }
+
+        # STEP 2: AUGMENT
+        prompt = self.build_prompt(question, context_chunks, include_conversation=is_follow_up)
+
+        # STEP 3: GENERATE
+        answer = self.generate(prompt)
+
+        # Save to conversation history
+        self.conversation_history.append((question, answer))
+        self.last_sources = context_chunks
+
+        # Check if referencing previous information
+        if self.conversation_history and len(self.conversation_history) > 1:
+            # Check if current sources match previous sources
+            prev_topics = [q for q, _ in list(self.conversation_history)[:-1]]
+            if any(word in question.lower() for word in ["again", "previous", "earlier", "before"]):
+                answer = f"As we discussed earlier: {answer}"
+
+        # Prepare response with sources
+        response = {
+            "answer": answer,
+            "sources": [
+                {
+                    "source": chunk['source'],
+                    "page": chunk['page'],
+                    "score": chunk['score']
+                }
+                for chunk in context_chunks
+            ]
+        }
+
+        return response
+
+    def get_statistics(self) -> Dict:
+        """Get statistics about the knowledge base and agent state"""
+        try:
+            collection_data = self.collection.get()
+            total_docs = len(collection_data.get("documents", []))
+            metadatas = collection_data.get("metadatas", [])
+
+            # Count by source
+            sources = {}
+            content_types = {"text": 0, "table": 0}
+
+            for meta in metadatas:
+                source = meta.get("source", "unknown")
+                sources[source] = sources.get(source, 0) + 1
+
+                content_type = meta.get("type", "text")
+                if content_type in content_types:
+                    content_types[content_type] += 1
+
+            return {
+                "total_chunks": total_docs,
+                "sources": sources,
+                "content_types": content_types,
+                "database_path": str(self.chroma_path.resolve()),
+                "collection_name": self.collection_name,
+                "conversation_length": len(self.conversation_history),
+                "cached_queries": len(self.query_cache)
+            }
+        except Exception as e:
+            logger.error(f"Failed to get statistics: {e}")
+            return {}
+
+    def clear_memory(self):
+        """Clear conversation history and cache"""
+        self.conversation_history.clear()
+        self.query_cache.clear()
+        self.last_sources = []
+        print(f"{GREEN}[AGENT] Memory cleared{RESET}")
+
+# ═══════════════════════════════════════════════════════════════════
+# Helper Functions
+# ═══════════════════════════════════════════════════════════════════
+
+def check_ollama_status():
+    """Check if Ollama is running and the model is available"""
     try:
-        response = requests.get(
-            f"https://nominatim.openstreetmap.org/search?q={location_query}&format=json", 
-            headers=headers
-        )
-        geo = response.json()
-        if geo:
-            return float(geo[0]['lat']), float(geo[0]['lon'])
-        return None, None
-    except Exception as e:
-        print(f"{RED}Geocoding error: {e}{RESET}")
-        return None, None
+        response = requests.get("http://localhost:11434/api/tags", timeout=2)
+        if response.status_code == 200:
+            print(f"{GREEN}✅ Ollama is running{RESET}")
 
-# --- Calculate straight-line distance between two points (in miles) ---
-def haversine_distance(lat1, lon1, lat2, lon2):
-    """Calculate straight-line distance between two points (in miles)"""
-    R = 3958.8  # Earth radius in miles
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = (math.sin(dlat/2)**2 + 
-         math.cos(math.radians(lat1)) * 
-         math.cos(math.radians(lat2)) * 
-         math.sin(dlon/2)**2)
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c
+            models = response.json().get('models', [])
+            model_names = [m.get('name', '') for m in models]
+            if OLLAMA_MODEL in model_names or any(OLLAMA_MODEL in name for name in model_names):
+                print(f"{GREEN}✅ Model '{OLLAMA_MODEL}' is available{RESET}")
+                return True
+            else:
+                print(f"{YELLOW}⚠️  Model '{OLLAMA_MODEL}' not found. Run: ollama pull {OLLAMA_MODEL}{RESET}")
+                return False
+        else:
+            print(f"{YELLOW}⚠️  Ollama not responding properly{RESET}")
+            return False
+    except:
+        print(f"{RED}❌ Ollama not running. Start with: ollama serve{RESET}")
+        print(f"   Then pull model: ollama pull {OLLAMA_MODEL}")
+        return False
 
-def calculate_distance_tool(starting_loc, destination_query):
-    """Calculate distance from starting location to destination"""
-    print(f"\n{CYAN}Using Distance Calculation Tool{RESET}")
-    print(f"{YELLOW}Starting location: {starting_loc['city']} ({starting_loc['lat']}, {starting_loc['lon']}){RESET}")
-    print(f"{YELLOW}Destination: {destination_query}{RESET}")
-    
-    # Geocode destination
-    dest_lat, dest_lon = geocode_location(destination_query)
-    if dest_lat is None or dest_lon is None:
-        return {"error": "Could not find destination coordinates"}
-    
-    print(f"{YELLOW}Destination coordinates: ({dest_lat}, {dest_lon}){RESET}")
-    
-    # Calculate distance
-    miles = haversine_distance(
-        starting_loc['lat'], starting_loc['lon'],
-        dest_lat, dest_lon
-    )
-    distance = round(miles, 2)
-    print(f"{YELLOW}Calculated distance: {distance} miles{RESET}")
-    return {"destination": destination_query, "distance_miles": distance}
+# ═══════════════════════════════════════════════════════════════════
+# Main Interactive Loop
+# ═══════════════════════════════════════════════════════════════════
 
-# --- RAG Functions ---
-# --- Search the vector database to find relevant snippets
-def search_vector_db(query):
-    """Search ChromaDB for relevant document snippets"""
-    print(f"\n{RED}RAG Search Query:{RESET} '{query}'")
-    results = collection.query(query_texts=[query], n_results=2)
-    snippets = results["documents"][0] if results["documents"] else []
-    
-    if snippets:
-        print(f"{RED}RAG Retrieved Snippets:{RESET}")
-        for idx, snippet in enumerate(snippets, 1):
-            print(f"{RED}{BOLD}{idx}. {snippet}{RESET}")
-    else:
-        print(f"{RED}No relevant snippets found in documents{RESET}")
-    
-    return snippets
-
-# --- See if we can pull a city from the RAG results ---
-def extract_city_from_rag(snippets):
-    """Try to extract city names from RAG results"""
-    KNOWN_CITIES = ["New York", "San Francisco", "Chicago", "Austin", "Boston",
-                    "London", "Toronto", "Tokyo", "Sydney", "Berlin"]
-    
-    for snippet in snippets:
-        for city in KNOWN_CITIES:
-            if city.lower() in snippet.lower():
-                print(f"{GREEN}RAG detected city: {city}{RESET}")
-                return city
-    return None
-
-# --- As a fallback, try to pull a city via the LLM ---
-def fallback_detect_city_with_llm(text):
-    """Use LLM as fallback for city detection"""
-    print(f"{YELLOW}Using LLM fallback for city detection{RESET}")
-    messages = [
-        {"role": "system", "content": "Identify ONLY the city name mentioned in the query. Reply ONLY with the city name."},
-        {"role": "user", "content": text}
-    ]
-    completion = client.chat.completions.create(
-        model="llama3.2",
-        messages=messages
-    )
-    raw = completion.choices[0].message.content
-    city = raw.strip()
-    print(f"{GREEN}LLM detected city: {city}{RESET}")
-    return city
-
-# --- Prompt and Response Generation ---
-def get_city_facts(location_name):
-    """Get interesting facts about a city"""
-    messages = [
-        {"role": "system", "content": "Provide exactly 3 interesting facts about the city. Each fact starts with a dash (-)."},
-        {"role": "user", "content": f"Tell me 3 interesting facts about {location_name}."}
-    ]
-    completion = client.chat.completions.create(
-        model="llama3.2",
-        messages=messages,
-    )
-    return completion.choices[0].message.content
-
-# --- Format output ----
-def format_final_output(location_name, office_facts, city_facts, distance_info, starting_city):
-    """Format final response for user"""
-    output = f"{BOLD}{BLUE}Facts about the Office in {location_name}:{RESET}{BLUE}\n\n"
-    for fact in office_facts:
-        output += f"• {fact.strip()}\n"
-    
-    output += f"\n{BOLD}{BLUE}Facts about {location_name}:{RESET}{BLUE}\n\n"
-    for fact in city_facts:
-        output += f"• {fact.strip()}\n"
-    
-    dist = distance_info.get('distance_miles', 'unknown')
-    output += f"\n{BOLD}{BLUE}Distance from {starting_city}:{RESET}{BLUE} {dist} miles"
-    return output
-
-# --- Document Indexing ---
-print("\nLoading and indexing PDF into ChromaDB...")
-pdf_text = ""
-with pdfplumber.open("../data/offices.pdf") as pdf:
-    for page in pdf.pages:
-        pdf_text += page.extract_text() + "\n"
-
-model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2')
-chroma_client = chromadb.Client()
-collection = chroma_client.get_or_create_collection(
-    name="office_docs",
-    embedding_function=embedding_functions.SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
-)
-
-docs = [line.strip() for line in pdf_text.split('\n') if len(line.strip()) > 20]
-ids = [f"doc_{i}" for i in range(len(docs))]
-collection.add(documents=docs, ids=ids)
-print(f"{GREEN}Indexed {len(docs)} office documents.{RESET}")
-
-# --- Main Interaction Loop ---
 if __name__ == "__main__":
-    # Set starting location
-    starting_loc = set_starting_location_interactively()
-    
-    print("\nTravel Assistant ready! (Type 'exit' to quit)")
-    print(f"{CYAN}Current starting location: {starting_loc['city']} ({starting_loc['lat']}, {starting_loc['lon']}){RESET}")
+    print(f"{BOLD}{CYAN}{'='*60}{RESET}")
+    print(f"{BOLD}{CYAN}Enhanced RAG Agent with Conversation Memory{RESET}")
+    print(f"{BOLD}{CYAN}Using ChromaDB + Llama 3.2 (Ollama){RESET}")
+    print(f"{BOLD}{CYAN}{'='*60}{RESET}")
 
-    while True:
-        user_input = input("\nUser: ")
-        if user_input.lower() == "exit":
-            print("Goodbye!")
-            break
+    try:
+        # Initialize RAG system
+        print(f"\n{YELLOW}Initializing RAG agent with memory...{RESET}")
+        rag = RAGAgent()
 
-        # RAG Document Search
-        rag_snippets = search_vector_db(user_input)
-        
-        # City Detection Workflow
-        detected_city = extract_city_from_rag(rag_snippets)
-        if not detected_city:
-            detected_city = fallback_detect_city_with_llm(user_input)
-        
-        if not detected_city:
-            print(f"{RED}Could not detect a valid city name{RESET}")
-            continue
+        # Display statistics
+        stats = rag.get_statistics()
+        print(f"\n{GREEN}Knowledge Base Statistics:{RESET}")
+        print(f"  Total Chunks: {stats.get('total_chunks', 0)}")
+        print(f"  Database: {stats.get('database_path', 'N/A')}")
 
-        # Prepare Office Facts
-        office_facts = [snippet for snippet in rag_snippets if detected_city.lower() in snippet.lower()]
-        if not office_facts:
-            office_facts = ["No specific office information found in documents"]
-        
-        # Prepare City Facts
-        city_facts_text = get_city_facts(detected_city)
-        city_facts = [line[1:].strip() for line in city_facts_text.split('\n') 
-                     if line.startswith('-') or line.startswith('•')][:3]
-        
-        # Calculate Distance
-        distance_info = calculate_distance_tool(starting_loc, detected_city)
-        
-        # Generate Final Output
-        final_output = format_final_output(
-            detected_city,
-            office_facts,
-            city_facts,
-            distance_info,
-            starting_loc['city']
-        )
-        
-        print(f"\n{GREEN}Assistant Final Response:{RESET}\n\n{BLUE}{final_output}{RESET}")
+        print(f"\n  {CYAN}Content Types:{RESET}")
+        for content_type, count in stats.get('content_types', {}).items():
+            print(f"    • {content_type}: {count}")
+
+        print(f"\n  {CYAN}Source Documents:{RESET}")
+        for source, count in stats.get('sources', {}).items():
+            print(f"    • {source}: {count} chunks")
+
+        print(f"\n  {MAGENTA}Agent Memory Status:{RESET}")
+        print(f"    • Conversation history: {stats.get('conversation_length', 0)} exchanges")
+        print(f"    • Cached queries: {stats.get('cached_queries', 0)}")
+
+        # Check Ollama
+        print(f"\n{YELLOW}Checking Ollama connection...{RESET}")
+        if not check_ollama_status():
+            print(f"\n{RED}Warning: Ollama may not be properly configured{RESET}")
+
+        # Suggested queries
+        print(f"\n{BOLD}{GREEN}{'='*60}{RESET}")
+        print(f"{BOLD}{GREEN}Example Questions (try follow-ups!):{RESET}")
+        print(f"{BOLD}{GREEN}{'='*60}{RESET}")
+        print("  • How can I return a product?")
+        print("    → Follow with: 'Tell me more about the timeframe'")
+        print("  • What are the shipping costs?")
+        print("    → Follow with: 'What about international?'")
+        print("  • How do I reset my password?")
+        print("    → Follow with: 'What if that doesn't work?'")
+        print(f"\n{MAGENTA}Special commands:{RESET}")
+        print("  • 'clear' - Clear conversation memory")
+        print("  • 'exit' - Quit the agent")
+        print(f"{BOLD}{GREEN}{'='*60}{RESET}")
+
+        # Interactive loop
+        print(f"\n{CYAN}Ask your question (or 'exit' to quit):{RESET}")
+
+        while True:
+            # Get user input
+            user_input = input(f"\n{BOLD}User:{RESET} ")
+
+            if user_input.lower() in ['exit', 'quit', 'q']:
+                print(f"\n{GREEN}Goodbye!{RESET}")
+                if rag.conversation_history:
+                    print(f"{MAGENTA}[AGENT] Processed {len(rag.conversation_history)} queries this session{RESET}")
+                break
+
+            if user_input.lower() == 'clear':
+                rag.clear_memory()
+                continue
+
+            if not user_input.strip():
+                continue
+
+            # Process query
+            result = rag.query(user_input, max_context_chunks=3)
+
+            # Display answer
+            print(f"\n{BOLD}{GREEN}{'='*60}{RESET}")
+            print(f"{BOLD}{GREEN}ANSWER:{RESET}")
+            print(f"{BOLD}{GREEN}{'='*60}{RESET}")
+            print(f"{BLUE}{result['answer']}{RESET}")
+
+            # Display sources
+            if result['sources']:
+                print(f"\n{BOLD}{CYAN}{'─'*60}{RESET}")
+                print(f"{BOLD}{CYAN}SOURCES:{RESET}")
+                print(f"{BOLD}{CYAN}{'─'*60}{RESET}")
+                for i, source in enumerate(result['sources'], 1):
+                    print(f"  [{i}] {source['source']} (Page {source['page']}) - Relevance: {source['score']:.3f}")
+
+            # Show memory status if conversation is building
+            if len(rag.conversation_history) > 1:
+                print(f"\n{MAGENTA}[Memory: {len(rag.conversation_history)} exchanges, {len(rag.query_cache)} cached queries]{RESET}")
+
+    except KeyboardInterrupt:
+        print(f"\n\n{YELLOW}Interrupted. Goodbye!{RESET}")
+    except Exception as e:
+        print(f"\n{RED}❌ Error: {e}{RESET}")
+        print(f"\n{YELLOW}Make sure to:{RESET}")
+        print("  1. Run: python tools/index_pdfs.py")
+        print("  2. Start Ollama: ollama serve")
+        print("  3. Pull model: ollama pull llama3.2:1b")

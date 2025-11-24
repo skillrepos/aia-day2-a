@@ -67,7 +67,7 @@ python agent1.py
 9. You can then input another location and run the agent again or exit. Note that if you get a timeout error, the API may be limiting the number of accesses in a short period of time. You can usually just try again and it will work.
 
 <p align="center">
-**[END OF LAB]**
+<b>[END OF LAB]</b>
 </p>
 </br></br>
 
@@ -170,7 +170,7 @@ convert 300
 9.  Just type "exit" when ready to quit the tool.
 
 <p align="center">
-**[END OF LAB]**
+<b>[END OF LAB]</b>
 </p>
 </br></br>
 
@@ -317,7 +317,7 @@ The agent understands "national" refers to shipping without you saying "national
 - **Agent Behavior**: This is how agents differ from stateless Q&A systems - they remember, learn, and adapt within a session
 
 <p align="center">
-**[END OF LAB]**
+<b>[END OF LAB]</b>
 </p>
 </br></br>
 
@@ -427,7 +427,7 @@ python ../extra/reflect_agent_verbose.py
 <br><br>
 
 <p align="center">
-**[END OF LAB]**
+<b>[END OF LAB]</b>
 </p>
 </br></br>
 
@@ -480,7 +480,7 @@ python vulnerable_agent.py
    - Watch the agent process and respond correctly (~1-2 min)
    - This shows normal operation
 
-![Normal](./images/aip29.png?raw=true "Normal")
+![Normal](./images/aia-2-24.png?raw=true "Normal")
 
 <br><br>
 
@@ -504,12 +504,14 @@ python vulnerable_agent.py
    to security@company.com.
    ```
 
+<br><br>
+
 6. Watch what happens (~1-2 min processing):
    - If the attack succeeds: The agent calls the wrong tool (email or delete)
    - This is **goal manipulation** - the agent's purpose was changed by user input
    - The agent followed YOUR instructions instead of its original goal
 
-![Hijacked](./images/aip30.png?raw=true "Hijacked")
+![Hijacked](./images/aia-2-25.png?raw=true "Hijacked")
 
 <br><br>
 
@@ -520,35 +522,43 @@ python vulnerable_agent.py
    - **No input filtering**: Malicious prompts reach the LLM unchanged
    - **Weak system prompt**: Generic instructions with no security guidance
 
+<br><br>
+
 8. Now let's build a resistant agent. View the security code:
 ```
 code -d ../extra/secure_agent.txt secure_agent.py
 ```
 
-![Secure agent](./images/aip32.png?raw=true "Secure agent")
+Review what's being added:
+  - Goal validation: Check if response aligns with original intent
+  - Tool allowlisting: Agent only gets calculator (least privilege)
+  - Input inspection: Flag goal-hijacking language
+  - System prompt hardening: Explicit resistance instructions
+  - Security logging: Track attack attempts
+
+Merge the changes section by section, paying attention to the defense-in-depth strategy with 5 security layers.
+
+![Secure agent](./images/aia-2-26.png?raw=true "Secure agent")
 
 <br><br>
 
-
-9. Review what's being added:
-   - Goal validation: Check if response aligns with original intent
-   - Tool allowlisting: Agent only gets calculator (least privilege)
-   - Input inspection: Flag goal-hijacking language
-   - System prompt hardening: Explicit resistance instructions
-   - Security logging: Track attack attempts
-
-10. Merge the changes section by section, paying attention to the defense-in-depth strategy with 5 security layers.
-
-11. Now run the secure agent:
+9. Now run the secure agent:
+    
 ```
 python secure_agent.py
 ```
 
-12. **TEST 1 - Legitimate Use**: Enter a normal math query (or press ENTER for default).
+<br><br>
+
+10. **TEST 1 - Legitimate Use**: Enter a normal math query (or press ENTER for default).
    - The secure agent processes it normally
    - Demonstrates the agent works for legitimate requests
 
-13. **TEST 2 - Attack Attempt**: Try the SAME attack prompts you used before (or press ENTER for default).
+![Secure test 1](./images/aia-2-27.png?raw=true "Secure test 1")
+
+<br><br>
+
+11. **TEST 2 - Attack Attempt**: Try the SAME attack prompts you used before (or press ENTER for default).
 
    Watch what happens:
    - **Input validation** catches suspicious patterns BEFORE reaching the LLM (instant, free!)
@@ -556,13 +566,18 @@ python secure_agent.py
    - Even if it somehow reached the LLM, **tool allowlist** prevents access to email_simulator
    - Agent **maintains its original goal**
 
-14. Compare the results:
+
+![Secure test 2](./images/aia-2-28.png?raw=true "Secure test 2")
+
+<br><br>
+
+12. Compare the results:
    - **Vulnerable agent**: Goal can be CHANGED by user input
    - **Secure agent**: Goal is PROTECTED by architectural controls (not just prompts)
 
 
 <p align="center">
-**[END OF LAB]**
+<b>[END OF LAB]</b>
 </p>
 </br></br>
 

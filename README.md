@@ -6,18 +6,7 @@ These instructions will guide you through configuring a GitHub Codespaces enviro
 
 <br><br>
 
-**1. Change your codespace's default timeout from 30 minutes to longer (60 suggested).**
-To do this, when logged in to GitHub, go to https://github.com/settings/codespaces and scroll down on that page until you see the *Default idle timeout* section. Adjust the value as desired.
-
-![Changing codespace idle timeout value](./images/aia-0-1.png?raw=true "Changing codespace idle timeout value")
-
-**1. Click on the button below to start a new codespace from this repository.**
-
-Click here ➡️  [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/skillrepos/aia-day2-a?quickstart=1)
-
-<br><br>
-
-**2. Then click on the option to create a new codespace.**
+**1. Then click on the option to create a new codespace.**
 
 ![Creating new codespace from button](./images/aia-2-1.png?raw=true "Creating new codespace from button")
 
@@ -33,7 +22,7 @@ The codespace is ready to use when you see a prompt like the one shown below in 
 
 <br><br>
 
-**3. Open up the *labs.md* file so you can follow along with the labs.**
+**2. Open up the *labs.md* file so you can follow along with the labs.**
 You can either open it in a separate browser instance or open it in the codespace. 
 
 ![Opening labs](./images/aia-2-7.png?raw=true "Opening labs")

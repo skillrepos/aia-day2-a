@@ -56,8 +56,8 @@ code -d ../extra/lab1-code.txt agent1.py
 
 <br><br>
 
-5. Once you have run the command, you'll have a side-by-side view in your editor of the completed code and the agent1.py file.
-  You can merge each section of code into the agent1.py file by hovering over the middle bar and clicking on the arrows pointing right. Go through each section, look at the code, and then click to merge the changes in, one at a time.
+5. Once you have run the command, you'll have a side-by-side view in your editor of the completed code and the *agent1.py* file.
+  You can merge each section of code into the *agent1.py* file by hovering over the middle bar and clicking on the arrows pointing right. Go through each section, look at the code, and then click to merge the changes in, one at a time.
 
 ![Side-by-side merge](./images/aa40.png?raw=true "Side-by-side merge") 
 
@@ -77,13 +77,13 @@ python agent1.py
 
 <br><br>
 
-8. The agent will start running and will prompt for a location (or "exit" to finish). At the prompt, you can type in a location like "Paris, France" or "London" or "Raleigh" and hit *Enter*. After that you'll be able to see the Thought -> Action -> Observation loop in practice as each one is listed out. You'll also see the arguments being passed to the tools as they are called. Finally you should see a human-friendly message from the AI summarizing the weather forecast.
+8. The agent will start running and will prompt for a location (or "exit" to finish). (This may take a while to run.) At the prompt, you can type in a location like "Paris, France" or "London" or "Raleigh" and hit *Enter*. After that you'll be able to see the Thought -> Action -> Observation loop in practice as each one is listed out. You'll also see the arguments being passed to the tools as they are called. Finally you should see a human-friendly message from the AI summarizing the weather forecast.
 
 ![Agent run](./images/aia-2-8.png?raw=true "Agent run") 
 
 <br><br>
 
-9. You can then input another location and run the agent again or exit. Note that if you get a timeout error, the API may be limiting the number of accesses in a short period of time. You can usually just try again and it will work.
+9. You can then input another location and run the agent again or exit. Note that the API may be limiting the number of accesses in a short period of time and so you may see the agent retrying.
 
 <p align="center">
 <b>[END OF LAB]</b>

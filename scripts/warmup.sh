@@ -21,7 +21,7 @@ else
 fi
 
 # Run the warmup script
-python3 "$(dirname "$0")"/warmup_model.py --quick
+python3 "$(dirname "$0")"/warmup_model.py --max-per-model 3
 
 exit_code=$?
 
@@ -32,3 +32,4 @@ else
 fi
 
 exit $exit_code
+

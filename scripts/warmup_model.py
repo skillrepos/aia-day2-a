@@ -220,36 +220,66 @@ def warmup_model(model_name: str, prompt: str, context: str = "") -> bool:
         print(f"      ✗ Error: {e}")
         return False
 
-def warmup_all_labs(models: List[str], quick_mode: bool = False):
-    """Run all warmup prompts for all labs."""
-    prompts = QUICK_WARMUP_PROMPTS if quick_mode else WARMUP_PROMPTS
+def warmup_all_labs(models: List[str], quick_mode: bool = False, max_per_model: int = 0):
+    """Run all warmup prompts for all labs.
 
-    total_queries = sum(len(queries) for queries in prompts.values()) * len(models)
+    Improvements:
+    - Deduplicate prompts so the same prompt isn't sent repeatedly.
+    - In quick mode, restrict to the first model to avoid long runs.
+    - Allow an optional `max_per_model` cap to limit work per model.
+    """
+    prompts_map = QUICK_WARMUP_PROMPTS if quick_mode else WARMUP_PROMPTS
+
+    # In quick mode, only use the first model unless user overrides
+    if quick_mode and len(models) > 1:
+        print("⚡ Quick mode: limiting to first model to speed up warmup")
+        models = [models[0]]
+
+    # Build a deduplicated ordered list of prompts (preserve order of appearance)
+    seen_prompts = set()
+    unique_prompts = []
+    for lab_name, lab_prompts in prompts_map.items():
+        for item in lab_prompts:
+            prompt = item.get("prompt") if isinstance(item, dict) else item
+            if prompt is None:
+                continue
+            if prompt in seen_prompts:
+                continue
+            seen_prompts.add(prompt)
+            unique_prompts.append((lab_name, prompt, item.get("context", "") if isinstance(item, dict) else ""))
+
+    # Apply max_per_model if provided (>0)
+    if max_per_model and max_per_model < len(unique_prompts):
+        print(f"⚠️  Limiting to {max_per_model} prompts per model (from {len(unique_prompts)})")
+
+    total_queries = len(unique_prompts) * len(models)
     completed = 0
     failed = 0
 
     print_header("Starting Warmup Queries")
     print(f"Models: {', '.join(models)}")
     print(f"Mode: {'Quick' if quick_mode else 'Full'}")
-    print(f"Total queries: {total_queries}")
+    print(f"Total queries (approx): {total_queries}")
 
     for model in models:
         print_section(f"Warming up model: {model}")
 
-        for lab_name, lab_prompts in prompts.items():
+        per_model_count = 0
+        for lab_name, prompt, context in unique_prompts:
+            if max_per_model and per_model_count >= max_per_model:
+                break
+
             print(f"\n🧪 {lab_name}")
 
-            for item in lab_prompts:
-                prompt = item["prompt"]
-                context = item.get("context", "")
+            if warmup_model(model, prompt, context):
+                completed += 1
+            else:
+                failed += 1
 
-                if warmup_model(model, prompt, context):
-                    completed += 1
-                else:
-                    failed += 1
+            per_model_count += 1
 
-                # Small delay between queries
-                time.sleep(0.5)
+            # Small delay between queries
+            time.sleep(0.5)
 
     print_header("Warmup Complete")
     print(f"✓ Completed: {completed}/{total_queries}")
@@ -281,6 +311,12 @@ def main():
         action="store_true",
         help="Skip pulling models (assume they exist)"
     )
+    parser.add_argument(
+        "--max-per-model",
+        type=int,
+        default=0,
+        help="Maximum prompts to run per model (0 = all, default: 0)"
+    )
 
     args = parser.parse_args()
 
@@ -308,7 +344,7 @@ def main():
 
     # Step 3: Warm up models
     try:
-        warmup_all_labs(args.models, args.quick)
+        warmup_all_labs(args.models, args.quick, args.max_per_model)
     except KeyboardInterrupt:
         print("\n\n⚠️  Warmup interrupted by user")
         sys.exit(1)

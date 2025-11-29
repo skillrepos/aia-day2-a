@@ -22,9 +22,9 @@ After the initial startup, it will run a script to setup the python environment 
 
 ![Final prep](./images/aia-2-5.png?raw=true "Final prep")
 
-The codespace is ready to use when you see a prompt like the one shown below in its terminal.
+The codespace is ready to use when you see a prompt like the one shown below in its terminal. You will need to hit *Enter* to get a prompt back.
 
-![Ready to use](./images/aia-2-6.png?raw=true "Ready to use")
+![Ready to use](./images/aia-2-43.png?raw=true "Ready to use")
 
 <br><br>
 
